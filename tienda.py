@@ -27,9 +27,15 @@ def cargar_datos():
 def guardar_datos(df):
     df.to_csv(DB_FILE, index=False)
 
-def generar_qr(texto):
+def generar_qr(id_prenda):
+    # Enlace corregido sin la barra final
+    url_base = "https://shopingdolls-2yk4fnpwuwp3muzynxeq5i.streamlit.app" 
+    
+    # Esto genera el enlace directo a la prenda
+    enlace_final = f"{url_base}/?item={id_prenda}"
+    
     qr = qrcode.QRCode(version=1, box_size=10, border=4)
-    qr.add_data(texto)
+    qr.add_data(enlace_final)
     qr.make(fit=True)
     img = qr.make_image(fill_color="black", back_color="white")
     buf = BytesIO()
@@ -39,12 +45,49 @@ def generar_qr(texto):
 if 'inventory' not in st.session_state:
     st.session_state.inventory = cargar_datos()
 
+# --- 🚀 MODO ESCÁNER QR ---
+params = st.query_params
+if "item" in params:
+    id_buscado = params["item"]
+    df_filtro = st.session_state.inventory[st.session_state.inventory['ID'] == id_buscado]
+    
+    if not df_filtro.empty:
+        st.warning("📱 **MODO ESCÁNER QR ACTIVADO**")
+        prenda = df_filtro.iloc[0]
+        st.subheader(f"✨ Detalles de: {prenda['Producto']}")
+        
+        col1, col2 = st.columns(2)
+        with col1:
+            st.write(f"**ID:** `{prenda['ID']}`")
+            st.write(f"**Categoría:** {prenda['Categoría']}")
+            st.write(f"**Talla:** {prenda['Talla']}")
+        with col2:
+            st.write(f"**Stock actual:** {prenda['Stock']} unidades")
+            st.write(f"**Precio:** ${prenda['Precio']}")
+            st.write(f"**Ventas Totales:** {prenda['Ventas_Total']}")
+            
+        foto_p = os.path.join(FOTOS_DIR, f"{prenda['ID']}.png")
+        if os.path.exists(foto_p):
+            st.image(foto_p, width=300)
+        
+        st.divider()
+        if st.button("⬅️ Volver a la Tienda Completa"):
+            st.query_params.clear()
+            st.rerun()
+            
+        st.stop() 
+    else:
+        st.error("❌ Prenda no encontrada.")
+        if st.button("Volver"):
+            st.query_params.clear()
+            st.rerun()
+        st.stop()
+
 # --- DISEÑO ---
 st.markdown("""
     <style>
     .stApp { background-color: #ffffff; }
     .main-header { font-size: 2.2rem; color: #1e1e1e; font-weight: 800; }
-    .metric-card { background: white; padding: 15px; border-radius: 10px; border: 1px solid #eee; }
     </style>
     """, unsafe_allow_html=True)
 
@@ -63,10 +106,10 @@ with st.sidebar:
         
         if st.form_submit_button("Registrar en el Imperio"):
             if nombre:
+                # Generamos un ID único basado en el total + 101
                 nuevo_id = f"SD-{len(st.session_state.inventory) + 101}"
                 fecha_hoy = datetime.now().strftime("%Y-%m-%d")
                 
-                # Guardar foto si existe
                 if foto:
                     foto_path = os.path.join(FOTOS_DIR, f"{nuevo_id}.png")
                     with open(foto_path, "wb") as f:
@@ -88,20 +131,7 @@ tabs = st.tabs(["📦 Inventario", "📊 Estadísticas", "🏷️ Etiquetas y Ge
 
 # --- TAB 1: INVENTARIO VISUAL ---
 with tabs[0]:
-    col_busc, col_alert = st.columns([2, 1])
-    with col_busc:
-        busc = st.text_input("🔍 Buscar Prenda...")
-    
-    # Lógica de Alertas (Paso 3: Prendas Olvidadas)
-    hoy = datetime.now()
-    df_alertas = df.copy()
-    df_alertas['Dias'] = (hoy - pd.to_datetime(df_alertas['Fecha_Ingreso'])).dt.days
-    prendas_viejas = df_alertas[df_alertas['Dias'] > 30]
-    
-    if not prendas_viejas.empty:
-        st.warning(f"⚠️ Tienes {len(prendas_viejas)} prendas que llevan más de 30 días sin venderse. ¡Considera una rebaja!")
-
-    # Galería de fotos (Paso 1)
+    busc = st.text_input("🔍 Buscar Prenda...")
     df_v = df[df['Producto'].str.contains(busc, case=False)] if busc else df
     
     for i in range(0, len(df_v), 4):
@@ -118,35 +148,27 @@ with tabs[0]:
                     st.write(f"**{item['Producto']}**")
                     st.write(f"Stock: {item['Stock']} | ${item['Precio']}")
 
-# --- TAB 2: ANALYTICS (Paso 2) ---
+# --- TAB 2: ESTADÍSTICAS ---
 with tabs[1]:
-    st.subheader("📈 Rendimiento de tu Boutique")
     if not df.empty:
         c1, c2 = st.columns(2)
-        
-        # Gráfica de Stock por Categoría
-        fig_cat = px.pie(df, values='Stock', names='Categoría', title="Distribución de Stock", hole=0.4)
+        fig_cat = px.pie(df, values='Stock', names='Categoría', title="Distribución de Stock")
         c1.plotly_chart(fig_cat, use_container_width=True)
-        
-        # Gráfica de Ventas
-        fig_ventas = px.bar(df, x='Producto', y='Ventas_Total', title="Ventas por Producto", color='Categoría')
+        fig_ventas = px.bar(df, x='Producto', y='Ventas_Total', title="Ventas por Producto")
         c2.plotly_chart(fig_ventas, use_container_width=True)
-    else:
-        st.info("Añade datos para ver gráficas.")
 
 # --- TAB 3: GESTIÓN Y QR ---
 with tabs[2]:
     if not df.empty:
         col_m, col_q = st.columns([2, 1])
         with col_m:
-            sel = st.selectbox("Seleccionar para vender/editar:", df['Producto'].unique())
+            sel = st.selectbox("Seleccionar para gestionar:", df['Producto'].unique())
             idx = df[df['Producto'] == sel].index[0]
             item_sel = df.loc[idx]
             
-            st.write(f"**ID Unico:** `{item_sel['ID']}`")
-            st.write(f"**Ventas acumuladas:** {item_sel['Ventas_Total']} unidades")
+            st.write(f"**ID:** `{item_sel['ID']}`")
             
-            if st.button("💰 REGISTRAR VENTA (-1 unidad)"):
+            if st.button("💰 REGISTRAR VENTA (-1)"):
                 if st.session_state.inventory.at[idx, 'Stock'] > 0:
                     st.session_state.inventory.at[idx, 'Stock'] -= 1
                     st.session_state.inventory.at[idx, 'Ventas_Total'] += 1
@@ -154,12 +176,12 @@ with tabs[2]:
                     st.success("¡Venta registrada!")
                     st.rerun()
             
-            if st.button("🔥 Eliminar del Sistema"):
+            if st.button("🔥 Eliminar"):
                 st.session_state.inventory = st.session_state.inventory.drop(idx)
                 guardar_datos(st.session_state.inventory)
                 st.rerun()
 
         with col_q:
-            qr_gen = generar_qr(f"ShopingDolls ID: {item_sel['ID']}")
-            st.image(qr_gen, width=180)
+            qr_gen = generar_qr(item_sel['ID'])
+            st.image(qr_gen, width=200, caption="Escanea para ir al producto")
             st.download_button("📥 Bajar QR", qr_gen, f"QR_{item_sel['ID']}.png")
