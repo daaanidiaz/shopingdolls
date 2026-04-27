@@ -6,153 +6,149 @@ from io import BytesIO
 from datetime import datetime
 from fpdf import FPDF
 
-# 1. Configuración de la App
-st.set_page_config(page_title="ShopingDolls POS", page_icon="💳", layout="wide")
+# Configuración de página
+st.set_page_config(page_title="ShopingDolls POS PRO", page_icon="👑", layout="wide")
 
+# Archivos de datos
 DB_FILE = "inventario_dolls.csv"
+COUNT_FILE = "ultimo_ticket.txt"
 URL_APP = "https://shopingdolls-2yk4fnpwuwp3muzynxeq5i.streamlit.app"
 
-# --- FUNCIONES DE BASE DE DATOS ---
+# --- FUNCIONES DE PERSISTENCIA ---
 def cargar_datos():
-    if os.path.exists(DB_FILE):
-        return pd.read_csv(DB_FILE)
+    if os.path.exists(DB_FILE): return pd.read_csv(DB_FILE)
     return pd.DataFrame(columns=["ID", "Producto", "Precio", "Stock", "Ventas"])
 
-def guardar_datos(df):
-    df.to_csv(DB_FILE, index=False)
+def guardar_datos(df): df.to_csv(DB_FILE, index=False)
 
-# --- FUNCIÓN TICKET PDF ---
-def generar_ticket(carrito, total):
-    pdf = FPDF()
+def obtener_siguiente_ticket():
+    if not os.path.exists(COUNT_FILE):
+        with open(COUNT_FILE, "w") as f: f.write("1")
+        return 1
+    with open(COUNT_FILE, "r") as f:
+        n = int(f.read())
+    return n
+
+def actualizar_contador(n):
+    with open(COUNT_FILE, "w") as f: f.write(str(n + 1))
+
+# --- GENERADOR DE TICKET PROFESIONAL ---
+def generar_ticket_pro(carrito, total, n_ticket):
+    pdf = FPDF(format=(80, 150)) # Tamaño ticketera
     pdf.add_page()
-    pdf.set_font("Arial", 'B', 16)
-    pdf.cell(0, 10, "SHOPINGDOLLS EMPIRE", ln=True, align='C')
-    pdf.set_font("Arial", '', 10)
-    pdf.cell(0, 10, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
-    pdf.cell(0, 5, "-"*50, ln=True, align='C')
     
-    pdf.set_font("Arial", 'B', 12)
-    pdf.cell(100, 10, "Producto")
-    pdf.cell(0, 10, "Precio", ln=True)
-    pdf.set_font("Arial", '', 12)
-    for item in carrito:
-        pdf.cell(100, 10, f"{item['Producto']}")
-        pdf.cell(0, 10, f"${item['Precio']}", ln=True)
-    
-    pdf.cell(0, 10, "-"*50, ln=True, align='C')
+    # Encabezado con estilo
     pdf.set_font("Arial", 'B', 14)
-    pdf.cell(100, 10, "TOTAL:")
-    pdf.cell(0, 10, f"${total}", ln=True)
+    pdf.cell(0, 8, "SHOPINGDOLLS", ln=True, align='C')
+    pdf.set_font("Arial", '', 8)
+    pdf.cell(0, 4, "EMPIRE BOUTIQUE LUXURY", ln=True, align='C')
+    pdf.cell(0, 4, f"Ticket No: #{n_ticket:04d}", ln=True, align='C')
+    pdf.cell(0, 4, f"Fecha: {datetime.now().strftime('%d/%m/%Y %H:%M')}", ln=True, align='C')
+    pdf.cell(0, 5, "-"*30, ln=True, align='C')
+    
+    # Tabla de productos
+    pdf.set_font("Arial", 'B', 9)
+    pdf.cell(10, 8, "#", border=0)
+    pdf.cell(35, 8, "PRODUCTO", border=0)
+    pdf.cell(15, 8, "TOTAL", border=0, ln=True, align='R')
+    
+    pdf.set_font("Arial", '', 9)
+    for i, item in enumerate(carrito, 1):
+        pdf.cell(10, 7, str(i))
+        pdf.cell(35, 7, f"{item['Producto'][:15]}") # Corta nombre si es muy largo
+        pdf.cell(15, 7, f"${item['Precio']}", ln=True, align='R')
+    
+    # Pie de ticket
+    pdf.cell(0, 5, "-"*30, ln=True, align='C')
+    pdf.set_font("Arial", 'B', 11)
+    pdf.cell(45, 10, "TOTAL PAGADO:")
+    pdf.cell(15, 10, f"${total}", ln=True, align='R')
+    
+    pdf.set_font("Arial", 'I', 8)
+    pdf.multi_cell(0, 5, "\n¡Gracias por elegir el Imperio!\nNo se aceptan devoluciones sin ticket.", align='C')
+    
     return pdf.output(dest='S').encode('latin-1')
 
 # Inicializar estados
 if 'inventory' not in st.session_state: st.session_state.inventory = cargar_datos()
 if 'carrito' not in st.session_state: st.session_state.carrito = []
-if 'ticket_listo' not in st.session_state: st.session_state.ticket_listo = None
+if 'pdf_blob' not in st.session_state: st.session_state.pdf_blob = None
 
-# --- LÓGICA QR (ENTRADA DESDE MÓVIL) ---
-params = st.query_params
-if "item" in params:
-    id_buscado = str(params["item"])
-    match = st.session_state.inventory[st.session_state.inventory['ID'].astype(str) == id_buscado]
-    if not match.empty:
-        p = match.iloc[0]
-        st.session_state.carrito.append({"Producto": p['Producto'], "Precio": p['Precio'], "ID": p['ID']})
-        st.query_params.clear()
-        st.rerun()
+st.markdown("<h1 style='text-align: center; color: #D4AF37;'>👑 ShopingDolls Pay PRO</h1>", unsafe_allow_html=True)
 
-st.markdown("<h1 style='text-align: center; color: #FF4B4B;'>👑 ShopingDolls Pay</h1>", unsafe_allow_html=True)
+tab1, tab2, tab3 = st.tabs(["💰 CAJA REGISTRADORA", "➕ ALTA DE PRENDAS", "📦 INVENTARIO"])
 
-t1, t2, t3 = st.tabs(["💰 CAJA (Vender)", "➕ REGISTRAR ROPA", "📦 INVENTARIO"])
-
-# --- TAB 1: CAJA (AQUÍ ESTÁ EL MODO MANUAL) ---
-with t1:
-    col_izq, col_der = st.columns(2)
+# --- TAB 1: CAJA ---
+with tab1:
+    c1, c2 = st.columns([1, 1])
     
-    with col_izq:
-        st.subheader("🔍 Añadir Productos")
-        
-        # 1. MODO LECTOR DE BARRAS
-        barcode = st.text_input("Lector de Barras / QR (clic aquí):", key="scan")
-        if barcode:
-            match = st.session_state.inventory[st.session_state.inventory['ID'].astype(str) == str(barcode)]
+    with c1:
+        st.subheader("🔍 Entrada de Venta")
+        scan = st.text_input("Escanear con Lector:", key="input_scan")
+        if scan:
+            match = st.session_state.inventory[st.session_state.inventory['ID'].astype(str) == str(scan)]
             if not match.empty:
-                p = match.iloc[0]
-                st.session_state.carrito.append({"Producto": p['Producto'], "Precio": p['Precio'], "ID": p['ID']})
+                st.session_state.carrito.append(match.iloc[0].to_dict())
                 st.rerun()
-            else: st.error("Código no encontrado")
         
-        st.divider()
-        
-        # 2. MODO MANUAL (BUSCADOR)
-        st.write("✨ **Selección Manual:**")
-        lista_nombres = ["Buscar prenda..."] + st.session_state.inventory['Producto'].tolist()
-        seleccion = st.selectbox("Escribe o busca el nombre:", lista_nombres)
-        if seleccion != "Buscar prenda...":
-            if st.button("➕ Añadir Manualmente"):
-                p = st.session_state.inventory[st.session_state.inventory['Producto'] == seleccion].iloc[0]
-                st.session_state.carrito.append({"Producto": p['Producto'], "Precio": p['Precio'], "ID": p['ID']})
-                st.toast(f"{p['Producto']} añadido!")
-                st.rerun()
+        st.write("---")
+        opciones = ["Buscar manualmente..."] + st.session_state.inventory['Producto'].tolist()
+        manual = st.selectbox("O selecciona por nombre:", opciones)
+        if manual != "Buscar manualmente..." and st.button("Añadir al Carrito"):
+            p = st.session_state.inventory[st.session_state.inventory['Producto'] == manual].iloc[0]
+            st.session_state.carrito.append(p.to_dict())
+            st.rerun()
 
-    with col_der:
-        st.subheader("📋 Tu Carrito")
+    with c2:
+        st.subheader("🧾 Detalle del Ticket")
         if st.session_state.carrito:
-            df_car = pd.DataFrame(st.session_state.carrito)
-            st.table(df_car[["Producto", "Precio"]])
-            total_v = df_car["Precio"].sum()
-            st.markdown(f"## **TOTAL: ${total_v}**")
+            df_c = pd.DataFrame(st.session_state.carrito)
+            st.table(df_c[["Producto", "Precio"]])
+            total = df_c["Precio"].sum()
+            st.markdown(f"## TOTAL: ${total}")
             
-            if st.button("🚀 FINALIZAR Y PAGAR"):
-                st.session_state.ticket_listo = generar_ticket(st.session_state.carrito, total_v)
+            if st.button("💳 FINALIZAR COMPRA"):
+                n_actual = obtener_siguiente_ticket()
+                # Generar PDF
+                st.session_state.pdf_blob = generar_ticket_pro(st.session_state.carrito, total, n_actual)
+                
+                # Actualizar Stock y Ventas
                 for item in st.session_state.carrito:
                     idx = st.session_state.inventory[st.session_state.inventory['ID'] == item['ID']].index[0]
                     st.session_state.inventory.at[idx, 'Stock'] -= 1
                     st.session_state.inventory.at[idx, 'Ventas'] += 1
+                
                 guardar_datos(st.session_state.inventory)
+                actualizar_contador(n_actual)
                 st.session_state.carrito = []
                 st.balloons()
-            
-            if st.button("🗑️ Vaciar Carrito"):
-                st.session_state.carrito = []
+        
+        if st.session_state.pdf_blob:
+            st.success("¡Venta procesada con éxito!")
+            st.download_button("📥 IMPRIMIR TICKET PDF", st.session_state.pdf_blob, "ticket_shopingdolls.pdf", "application/pdf")
+            if st.button("Nueva Venta"):
+                st.session_state.pdf_blob = None
                 st.rerun()
 
-        if st.session_state.ticket_listo:
-            st.download_button("📥 DESCARGAR TICKET PDF", st.session_state.ticket_listo, 
-                               f"ticket_{datetime.now().strftime('%H%M%S')}.pdf", "application/pdf")
-            if st.button("Siguiente Venta"):
-                st.session_state.ticket_listo = None
-                st.rerun()
-
-# --- TAB 2: REGISTRO ---
-with t2:
-    with st.form("new"):
-        n = st.text_input("Nombre de prenda")
-        p = st.number_input("Precio", min_value=0.0)
+# --- TAB 2 Y 3 (Mantenemos la lógica anterior pero con diseño limpio) ---
+with tab2:
+    with st.form("registro"):
+        n = st.text_input("Nombre")
+        p = st.number_input("Precio $")
         s = st.number_input("Stock", min_value=1)
-        if st.form_submit_button("Guardar"):
+        if st.form_submit_button("Guardar Prenda"):
             new_id = datetime.now().strftime("%H%M%S")
             new_row = pd.DataFrame([{"ID": new_id, "Producto": n, "Precio": p, "Stock": s, "Ventas": 0}])
             st.session_state.inventory = pd.concat([st.session_state.inventory, new_row], ignore_index=True)
             guardar_datos(st.session_state.inventory)
-            st.success(f"Guardado: {n}")
             st.rerun()
 
-# --- TAB 3: INVENTARIO Y QRS ---
-with t3:
-    st.subheader("📦 Stock y Etiquetas")
-    # Editor manual por si quieres cambiar un precio rápido
-    df_ed = st.data_editor(st.session_state.inventory, use_container_width=True)
-    if st.button("💾 Guardar Cambios en Tabla"):
-        st.session_state.inventory = df_ed
-        guardar_datos(df_ed)
-        st.success("¡Datos actualizados!")
-    
-    st.divider()
+with tab3:
+    st.data_editor(st.session_state.inventory, use_container_width=True)
     if not st.session_state.inventory.empty:
-        sel_qr = st.selectbox("Elegir para ver QR:", st.session_state.inventory['Producto'])
-        row_q = st.session_state.inventory[st.session_state.inventory['Producto'] == sel_qr].iloc[0]
-        qr = qrcode.make(f"{URL_APP}/?item={row_q['ID']}")
-        buf = BytesIO()
-        qr.save(buf, format="PNG")
-        st.image(buf.getvalue(), width=150, caption=f"ID: {row_q['ID']}")
+        sel = st.selectbox("Ver QR de:", st.session_state.inventory['Producto'])
+        row = st.session_state.inventory[st.session_state.inventory['Producto'] == sel].iloc[0]
+        qr = qrcode.make(f"{URL_APP}/?item={row['ID']}")
+        b = BytesIO()
+        qr.save(b, format="PNG")
+        st.image(b.getvalue(), width=150)
