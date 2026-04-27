@@ -5,106 +5,122 @@ import qrcode
 from io import BytesIO
 from datetime import datetime
 
-# 1. Configuración Estética
-st.set_page_config(page_title="ShopingDolls Pay", page_icon="💳", layout="centered")
+# 1. Configuración de la App
+st.set_page_config(page_title="ShopingDolls Pay", page_icon="💳", layout="wide")
 
 DB_FILE = "inventario_dolls.csv"
 
+# --- FUNCIONES DE BASE DE DATOS ---
 def cargar_datos():
     if os.path.exists(DB_FILE):
         return pd.read_csv(DB_FILE)
-    return pd.DataFrame(columns=["ID", "Producto", "Categoría", "Talla", "Stock", "Precio", "Fecha_Ingreso", "Ventas_Total"])
+    return pd.DataFrame(columns=["ID", "Producto", "Precio", "Stock", "Ventas"])
 
 def guardar_datos(df):
     df.to_csv(DB_FILE, index=False)
 
+# Inicializar estados
 if 'inventory' not in st.session_state:
     st.session_state.inventory = cargar_datos()
 
 if 'carrito' not in st.session_state:
     st.session_state.carrito = []
 
-# --- LÓGICA DE ESCANEO (LECTOR QR) ---
+# --- 🚀 LÓGICA DE ESCANEO (COBRO POR QR) ---
 params = st.query_params
 if "item" in params:
     id_buscado = params["item"]
-    df = st.session_state.inventory
-    item_encontrado = df[df['ID'] == id_buscado]
-
+    item_encontrado = st.session_state.inventory[st.session_state.inventory['ID'] == id_buscado]
+    
     if not item_encontrado.empty:
         prenda = item_encontrado.iloc[0]
-        st.success(f"✅ ¡Producto detectado: {prenda['Producto']}!")
+        st.toast(f"✅ DETECTADO: {prenda['Producto']}")
+        
+        # Guardar en el carrito automáticamente
+        st.session_state.carrito.append({
+            "Producto": prenda['Producto'],
+            "Precio": prenda['Precio'],
+            "ID": prenda['ID']
+        })
+        # Limpiar URL para que no se duplique al refrescar
+        st.query_params.clear()
+        st.rerun()
+
+# --- DISEÑO DE LA INTERFAZ ---
+st.markdown("<h1 style='text-align: center; color: #FF4B4B;'>👑 ShopingDolls Pay</h1>", unsafe_allow_html=True)
+
+tab1, tab2, tab3 = st.tabs(["💰 CAJA (Cobrar)", "➕ AÑADIR ROPA", "📦 INVENTARIO"])
+
+# --- TAB 1: SISTEMA DE COBRO ---
+with tab1:
+    st.subheader("🛒 Carrito de Venta")
+    if st.session_state.carrito:
+        df_car = pd.DataFrame(st.session_state.carrito)
+        st.table(df_car[["Producto", "Precio"]])
+        
+        total = df_car["Precio"].sum()
+        st.markdown(f"## **TOTAL A PAGAR: ${total}**")
         
         col1, col2 = st.columns(2)
         with col1:
-            st.metric("Precio", f"${prenda['Precio']}")
+            if st.button("🚀 FINALIZAR PAGO"):
+                # Restar stock
+                for item in st.session_state.carrito:
+                    idx = st.session_state.inventory[st.session_state.inventory['ID'] == item['ID']].index[0]
+                    st.session_state.inventory.at[idx, 'Stock'] -= 1
+                    st.session_state.inventory.at[idx, 'Ventas'] = st.session_state.inventory.at[idx, 'Ventas'] + 1
+                
+                guardar_datos(st.session_state.inventory)
+                st.balloons()
+                st.success("¡Venta Realizada!")
+                st.session_state.carrito = []
+                st.rerun()
         with col2:
-            if st.button("➕ Añadir al Carrito"):
-                st.session_state.carrito.append({
-                    "ID": prenda['ID'],
-                    "Producto": prenda['Producto'],
-                    "Precio": prenda['Precio']
-                })
-                st.query_params.clear() # Limpiamos el link para poder seguir comprando
+            if st.button("🗑️ Vaciar Carrito"):
+                st.session_state.carrito = []
                 st.rerun()
     else:
-        st.error("Producto no encontrado.")
+        st.info("Escanea un código QR de una prenda para que aparezca aquí.")
 
-# --- INTERFAZ DE CAJA ---
-st.markdown("<h1 style='text-align: center; color: #E91E63;'>🛍️ ShopingDolls Pay</h1>", unsafe_allow_html=True)
-st.write("---")
-
-# Muestra el carrito actual
-if st.session_state.carrito:
-    st.subheader("🛒 Tu Carrito")
-    df_carrito = pd.DataFrame(st.session_state.carrito)
-    st.table(df_carrito[['Producto', 'Precio']])
-    
-    total = sum(item['Precio'] for item in st.session_state.carrito)
-    st.markdown(f"### 💰 TOTAL A PAGAR: `${total}`")
-    
-    col_a, col_b = st.columns(2)
-    with col_a:
-        if st.button("❌ Vaciar Carrito"):
-            st.session_state.carrito = []
-            st.rerun()
-    with col_b:
-        if st.button("🚀 FINALIZAR Y PAGAR"):
-            # Aquí restamos el stock de la base de datos
-            for item in st.session_state.carrito:
-                idx = st.session_state.inventory[st.session_state.inventory['ID'] == item['ID']].index[0]
-                if st.session_state.inventory.at[idx, 'Stock'] > 0:
-                    st.session_state.inventory.at[idx, 'Stock'] -= 1
-                    st.session_state.inventory.at[idx, 'Ventas_Total'] += 1
+# --- TAB 2: AÑADIR ROPA Y GENERAR QR ---
+with tab2:
+    st.subheader("✨ Registro Rápido")
+    with st.form("registro_rapido", clear_on_submit=True):
+        col_n, col_p, col_s = st.columns([3,1,1])
+        with col_n: nombre = st.text_input("Nombre de la prenda (Ej: Vestido Gala)")
+        with col_p: precio = st.number_input("Precio $", min_value=0.0)
+        with col_s: stock = st.number_input("Stock", min_value=1, value=10)
+        
+        enviar = st.form_submit_button("GUARDAR Y GENERAR QR")
+        
+        if enviar and nombre:
+            nuevo_id = f"SD-{datetime.now().strftime('%M%S')}"
+            nueva_fila = pd.DataFrame([{
+                "ID": nuevo_id, "Producto": nombre, "Precio": precio, "Stock": stock, "Ventas": 0
+            }])
             
+            st.session_state.inventory = pd.concat([st.session_state.inventory, nueva_fila], ignore_index=True)
             guardar_datos(st.session_state.inventory)
-            st.balloons()
-            st.success("¡Pago procesado con éxito! Gracias por tu compra.")
-            st.session_state.carrito = []
-            # st.rerun() # Opcional: reiniciar tras pagar
+            
+            st.success(f"¡{nombre} registrado con éxito!")
+            
+            # --- MOSTRAR QR INMEDIATAMENTE ---
+            url_app = "https://shopingdolls-2yk4fnpwuwp3muzynxeq5i.streamlit.app"
+            link_final = f"{url_app}/?item={nuevo_id}"
+            
+            qr_img = qrcode.make(link_final)
+            buf = BytesIO()
+            qr_img.save(buf, format="PNG")
+            
+            st.image(buf.getvalue(), width=300, caption=f"QR para {nombre} (ID: {nuevo_id})")
+            st.download_button("📥 DESCARGAR ETIQUETA QR", buf.getvalue(), f"QR_{nombre}.png")
 
-else:
-    st.info("👋 ¡Bienvenida! Escanea un código QR de una prenda para empezar a cobrar.")
-
-# --- SECCIÓN DE ADMINISTRACIÓN (PARA GENERAR QR) ---
-with st.expander("⚙️ Panel de Control (Generar QRs y Stock)"):
-    st.subheader("Generar Etiquetas para la ropa")
-    df_admin = st.session_state.inventory
-    if not df_admin.empty:
-        sel = st.selectbox("Selecciona prenda para imprimir QR:", df_admin['Producto'].unique())
-        item_sel = df_admin[df_admin['Producto'] == sel].iloc[0]
-        
-        # Generador de QR corregido con tu link
-        url_base = "https://shopingdolls-2yk4fnpwuwp3muzynxeq5i.streamlit.app"
-        enlace_qr = f"{url_base}/?item={item_sel['ID']}"
-        
-        qr = qrcode.make(enlace_qr)
-        buf = BytesIO()
-        qr.save(buf, format="PNG")
-        st.image(buf.getvalue(), width=200)
-        st.write(f"ID: {item_sel['ID']}")
-    else:
-        st.write("Aún no tienes productos en el inventario.")
-
-    if st.button("📊 Ver Inventario Completo"):
-        st.dataframe(st.session_state.inventory)
+# --- TAB 3: INVENTARIO ---
+with tab3:
+    st.subheader("📦 Stock Actual")
+    st.dataframe(st.session_state.inventory, use_container_width=True)
+    
+    if st.button("🗑️ Borrar Todo el Inventario (Cuidado)"):
+        st.session_state.inventory = pd.DataFrame(columns=["ID", "Producto", "Precio", "Stock", "Ventas"])
+        guardar_datos(st.session_state.inventory)
+        st.rerun()
